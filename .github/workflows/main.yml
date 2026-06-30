@@ -1,0 +1,92 @@
+name: Build & Release Multi Platform Binary
+
+on:
+  push:
+    branches: [ master, main ]
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          # Linux / MacOS 普通构建
+          - { GOOS: linux, GOARCH: amd64, suffix: "", ldflags: "" }
+          - { GOOS: linux, GOARCH: arm64, suffix: "", ldflags: "" }
+          - { GOOS: darwin, GOARCH: amd64, suffix: "", ldflags: "" }
+          - { GOOS: darwin, GOARCH: arm64, suffix: "", ldflags: "" }
+          # Linux amd64 musl 静态编译
+          - { GOOS: linux, GOARCH: amd64, suffix: "-musl", ldflags: "", musl: true }
+          # Windows 1：控制台版（带黑窗口，看日志）
+          - { GOOS: windows, GOARCH: amd64, suffix: "-console", ldflags: "" }
+          # Windows 2：GUI隐藏控制台版（无黑窗）
+          - { GOOS: windows, GOARCH: amd64, suffix: "-gui", ldflags: "-H windowsgui" }
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Setup Go 1.21
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: true
+
+      - name: Install musl toolchain
+        if: matrix.target.musl == true
+        run: |
+          sudo apt update && sudo apt install -y musl-tools
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Compile binary
+        env:
+          GOOS: ${{ matrix.target.GOOS }}
+          GOARCH: ${{ matrix.target.GOARCH }}
+          SUFFIX: ${{ matrix.target.suffix }}
+          LDFLAGS: ${{ matrix.target.ldflags }}
+          PKG_NAME: bilidanmaku-${{ matrix.target.GOOS }}-${{ matrix.target.GOARCH }}${{ matrix.target.suffix }}
+        run: |
+          mkdir -p output tmp_pack
+          BIN_NAME="output/bilidanmaku${SUFFIX}"
+          if [[ "${GOOS}" == "windows" ]]; then
+            BIN_NAME="${BIN_NAME}.exe"
+          fi
+
+          if [[ "${{ matrix.target.musl }}" == "true" ]]; then
+            export CGO_ENABLED=0
+            export CC=musl-gcc
+          fi
+
+          go build -ldflags "${LDFLAGS}" -o "${BIN_NAME}" cli/bilidanmaku.go
+
+          cp "${BIN_NAME}" tmp_pack/
+          cd tmp_pack
+          tar -czvf "../${PKG_NAME}.tar.gz" .
+
+      - name: Upload artifact to GitHub Actions storage
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PKG_NAME }}
+          path: bilidanmaku-*.tar.gz
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all packages
+        uses: actions/download-artifact@v4
+        with:
+          path: ./release_packs
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ./release_packs/*/*.tar.gz
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
