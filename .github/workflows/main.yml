@@ -15,21 +15,32 @@ jobs:
     strategy:
       matrix:
         target:
-          # Linux / MacOS 常规编译
-          - { GOOS: linux, GOARCH: amd64, suffix: "", ldflags: "" }
-          - { GOOS: linux, GOARCH: arm64, suffix: "", ldflags: "" }
-          - { GOOS: darwin, GOARCH: amd64, suffix: "", ldflags: "" }
-          - { GOOS: darwin, GOARCH: arm64, suffix: "", ldflags: "" }
-          # Linux amd64 musl 全静态编译
-          - { GOOS: linux, GOARCH: amd64, suffix: "-musl", ldflags: "", musl: true }
-          # Windows 控制台版（带黑窗口，调试用）
-          - { GOOS: windows, GOARCH: amd64, suffix: "-console", ldflags: "" }
-          # Windows GUI 无控制台版
-          - { GOOS: windows, GOARCH: amd64, suffix: "-gui", ldflags: "-H windowsgui" }
+          # Darwin
+          - { GOOS: darwin, GOARCH: arm64, archname: arm64, gui: false, ext: tar.gz }
+          - { GOOS: darwin, GOARCH: amd64, archname: x86_64, gui: false, ext: tar.gz }
+          # Linux
+          - { GOOS: linux, GOARCH: arm64, archname: arm64, gui: false, ext: tar.gz }
+          - { GOOS: linux, GOARCH: amd64, archname: x86_64, gui: false, ext: tar.gz }
+          # Windows arm64 控制台
+          - { GOOS: windows, GOARCH: arm64, archname: arm64, gui: false, ext: zip }
+          # Windows x86_64 控制台
+          - { GOOS: windows, GOARCH: amd64, archname: x86_64, gui: false, ext: zip }
+          # Windows x86_64 GUI无控制台
+          - { GOOS: windows, GOARCH: amd64, archname: x86_64, gui: true, ext: zip }
 
     steps:
       - name: Checkout source code
         uses: actions/checkout@v4
+
+      - name: Get version from tag
+        id: getver
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/v}
+          else
+            VERSION=dev
+          fi
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
 
       - name: Setup Go 1.21
         uses: actions/setup-go@v5
@@ -37,45 +48,60 @@ jobs:
           go-version: '1.21'
           cache: true
 
-      # 仅musl构建才安装工具链
-      - name: Install musl toolchain
-        if: matrix.target.musl == true
-        run: |
-          sudo apt update && sudo apt install -y musl-tools
-
       - name: Download go mod dependencies
         run: go mod download
 
       - name: Compile & Package
         run: |
           mkdir -p output tmp_pack
-          BIN_NAME="output/bilidanmaku${{ matrix.target.suffix }}"
-          if [[ "${{ matrix.target.GOOS }}" == "windows" ]]; then
-            BIN_NAME="${BIN_NAME}.exe"
-          fi
-
-          # 全局清空CC/CXX，防止交叉编译windows/darwin报错
+          # 清空C编译器环境变量，彻底解决交叉编译报错
           unset CC
           unset CXX
           export CGO_ENABLED=0
 
-          # 仅musl任务重新设置musl-gcc
-          if [[ "${{ matrix.target.musl }}" == "true" ]]; then
-            export CC=musl-gcc
+          # 基础文件名
+          BASE_NAME=BilibiliDanmuRobot
+          OS=${{ matrix.target.GOOS }}
+          ARCH_NAME=${{ matrix.target.archname }}
+          GUI_FLAG=${{ matrix.target.gui }}
+          EXT=${{ matrix.target.ext }}
+          VER=${{ env.VERSION }}
+
+          # 二进制输出路径
+          BIN_OUT=output/${BASE_NAME}
+          if [[ "${OS}" == "windows" ]]; then
+            BIN_OUT=${BIN_OUT}.exe
           fi
 
-          go build -ldflags "${{ matrix.target.ldflags }}" -o "${BIN_NAME}" cli/bilidanmaku.go
+          # GUI编译参数
+          LDFLAGS=""
+          PKG_PREFIX=""
+          if [[ "${GUI_FLAG}" == "true" ]]; then
+            LDFLAGS="-H windowsgui"
+            PKG_PREFIX="GUI-"
+          fi
 
-          PKG_NAME="bilidanmaku-${{ matrix.target.GOOS }}-${{ matrix.target.GOARCH }}${{ matrix.target.suffix }}"
-          cp "${BIN_NAME}" tmp_pack/
+          # 编译
+          GOOS=${OS} GOARCH=${{ matrix.target.GOARCH }} go build -ldflags "${LDFLAGS}" -o "${BIN_OUT}" cli/bilidanmaku.go
+
+          # 包完整名称
+          PKG_NAME=${PKG_PREFIX}${BASE_NAME}_${OS}_${ARCH_NAME}_${VER}
+          mv "${BIN_OUT}" tmp_pack/
+
+          # 打包
           cd tmp_pack
-          tar -czvf "../${PKG_NAME}.tar.gz" .
+          if [[ "${EXT}" == "zip" ]]; then
+            zip -q ../${PKG_NAME}.${EXT} *
+          else
+            tar -czvf ../${PKG_NAME}.${EXT} *
+          fi
+          cd ..
 
-      - name: Upload build artifact
+      - name: Upload artifact to GitHub storage
         uses: actions/upload-artifact@v4
         with:
-          name: bilidanmaku-${{ matrix.target.GOOS }}-${{ matrix.target.GOARCH }}${{ matrix.target.suffix }}
-          path: bilidanmaku-*.tar.gz
+          name: ${{ env.PKG_NAME }}
+          path: "*.tar.gz *.zip"
           if-no-files-found: error
 
   release:
@@ -85,15 +111,15 @@ jobs:
     env:
       ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
     steps:
-      - name: Download all artifacts
+      - name: Download all built packages
         uses: actions/download-artifact@v4
         with:
-          path: ./release_packs
+          path: ./release_files
 
-      - name: Create GitHub Release
+      - name: Create GitHub Release & attach all packages
         uses: softprops/action-gh-release@v2
         with:
-          files: ./release_packs/*/*.tar.gz
+          files: ./release_files/*/*.{tar.gz,zip}
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
