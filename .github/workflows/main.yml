@@ -32,15 +32,15 @@ jobs:
       - name: Checkout source code
         uses: actions/checkout@v4
 
-      - name: Get version from tag
-        id: getver
+      - name: Get version tag
+        id: get_version
         run: |
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            VERSION=${GITHUB_REF#refs/tags/v}
+            VER=${GITHUB_REF#refs/tags/v}
           else
-            VERSION=dev
+            VER=dev
           fi
-          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+          echo "VER=${VER}" >> $GITHUB_ENV
 
       - name: Setup Go 1.21
         uses: actions/setup-go@v5
@@ -48,60 +48,61 @@ jobs:
           go-version: '1.21'
           cache: true
 
-      - name: Download go mod dependencies
+      - name: Download dependencies
         run: go mod download
 
-      - name: Compile & Package
+      - name: Compile & Package binary
         run: |
           mkdir -p output tmp_pack
-          # 清空C编译器环境变量，彻底解决交叉编译报错
+          # 清空C编译器环境，彻底解决交叉编译报错
           unset CC
           unset CXX
           export CGO_ENABLED=0
 
-          # 基础文件名
-          BASE_NAME=BilibiliDanmuRobot
+          BASE_NAME="BilibiliDanmuRobot"
           OS=${{ matrix.target.GOOS }}
           ARCH_NAME=${{ matrix.target.archname }}
           GUI_FLAG=${{ matrix.target.gui }}
           EXT=${{ matrix.target.ext }}
-          VER=${{ env.VERSION }}
+          VER=${{ env.VER }}
 
-          # 二进制输出路径
-          BIN_OUT=output/${BASE_NAME}
-          if [[ "${OS}" == "windows" ]]; then
-            BIN_OUT=${BIN_OUT}.exe
-          fi
-
-          # GUI编译参数
-          LDFLAGS=""
+          # GUI前缀与编译参数
           PKG_PREFIX=""
+          LDFLAGS=""
           if [[ "${GUI_FLAG}" == "true" ]]; then
-            LDFLAGS="-H windowsgui"
             PKG_PREFIX="GUI-"
+            LDFLAGS="-H windowsgui"
           fi
 
-          # 编译
-          GOOS=${OS} GOARCH=${{ matrix.target.GOARCH }} go build -ldflags "${LDFLAGS}" -o "${BIN_OUT}" cli/bilidanmaku.go
+          # 二进制文件路径
+          BIN_FILE="output/${BASE_NAME}"
+          if [[ "${OS}" == "windows" ]]; then
+            BIN_FILE="${BIN_FILE}.exe"
+          fi
 
-          # 包完整名称
-          PKG_NAME=${PKG_PREFIX}${BASE_NAME}_${OS}_${ARCH_NAME}_${VER}
-          mv "${BIN_OUT}" tmp_pack/
+          # 交叉编译
+          GOOS=${OS} GOARCH=${{ matrix.target.GOARCH }} go build -ldflags "${LDFLAGS}" -o "${BIN_FILE}" cli/bilidanmaku.go
 
-          # 打包
+          # 最终包文件名
+          PKG_FILENAME="${PKG_PREFIX}${BASE_NAME}_${OS}_${ARCH_NAME}_${VER}.${EXT}"
+
+          # 打包到项目根目录
+          mv "${BIN_FILE}" tmp_pack/
           cd tmp_pack
           if [[ "${EXT}" == "zip" ]]; then
-            zip -q ../${PKG_NAME}.${EXT} *
+            zip -q ../"${PKG_FILENAME}" ./*
           else
-            tar -czvf ../${PKG_NAME}.${EXT} *
+            tar -czvf ../"${PKG_FILENAME}" ./*
           fi
           cd ..
+          ls -la ./*.tar.gz ./*.zip
+          echo "FILE=${PKG_FILENAME}" >> $GITHUB_ENV
 
-      - name: Upload artifact to GitHub storage
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.PKG_NAME }}
-          path: "*.tar.gz *.zip"
+          name: ${{ env.FILE }}
+          path: ${{ env.FILE }}
           if-no-files-found: error
 
   release:
@@ -111,15 +112,15 @@ jobs:
     env:
       ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
     steps:
-      - name: Download all built packages
+      - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          path: ./release_files
+          path: ./release_packs
 
-      - name: Create GitHub Release & attach all packages
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: ./release_files/*/*.{tar.gz,zip}
+          files: ./release_packs/*/*.{tar.gz,zip}
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
