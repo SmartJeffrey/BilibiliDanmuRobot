@@ -6,6 +6,10 @@ on:
     tags: ['v*']
   workflow_dispatch:
 
+env:
+  # 消除Node20弃用告警
+  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -19,9 +23,9 @@ jobs:
           - { GOOS: darwin, GOARCH: arm64, suffix: "", ldflags: "" }
           # Linux amd64 musl 静态编译
           - { GOOS: linux, GOARCH: amd64, suffix: "-musl", ldflags: "", musl: true }
-          # Windows 1：控制台版（带黑窗口，看日志）
+          # Windows 控制台版（带黑窗口）
           - { GOOS: windows, GOARCH: amd64, suffix: "-console", ldflags: "" }
-          # Windows 2：GUI隐藏控制台版（无黑窗）
+          # Windows GUI无控制台版
           - { GOOS: windows, GOARCH: amd64, suffix: "-gui", ldflags: "-H windowsgui" }
 
     steps:
@@ -42,27 +46,23 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
-      - name: Compile binary
-        env:
-          GOOS: ${{ matrix.target.GOOS }}
-          GOARCH: ${{ matrix.target.GOARCH }}
-          SUFFIX: ${{ matrix.target.suffix }}
-          LDFLAGS: ${{ matrix.target.ldflags }}
-          PKG_NAME: bilidanmaku-${{ matrix.target.GOOS }}-${{ matrix.target.GOARCH }}${{ matrix.target.suffix }}
+      - name: Compile binary & package tarball
         run: |
           mkdir -p output tmp_pack
-          BIN_NAME="output/bilidanmaku${SUFFIX}"
-          if [[ "${GOOS}" == "windows" ]]; then
+          BIN_NAME="output/bilidanmaku${{ matrix.target.suffix }}"
+          if [[ "${{ matrix.target.GOOS }}" == "windows" ]]; then
             BIN_NAME="${BIN_NAME}.exe"
           fi
 
+          # musl static build env
           if [[ "${{ matrix.target.musl }}" == "true" ]]; then
             export CGO_ENABLED=0
             export CC=musl-gcc
           fi
 
-          go build -ldflags "${LDFLAGS}" -o "${BIN_NAME}" cli/bilidanmaku.go
+          go build -ldflags "${{ matrix.target.ldflags }}" -o "${BIN_NAME}" cli/bilidanmaku.go
 
+          PKG_NAME="bilidanmaku-${{ matrix.target.GOOS }}-${{ matrix.target.GOARCH }}${{ matrix.target.suffix }}"
           cp "${BIN_NAME}" tmp_pack/
           cd tmp_pack
           tar -czvf "../${PKG_NAME}.tar.gz" .
@@ -70,13 +70,17 @@ jobs:
       - name: Upload artifact to GitHub Actions storage
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.PKG_NAME }}
+          # 直接用矩阵拼接名称，不依赖环境变量，杜绝空名称报错
+          name: bilidanmaku-${{ matrix.target.GOOS }}-${{ matrix.target.GOARCH }}${{ matrix.target.suffix }}
           path: bilidanmaku-*.tar.gz
+          if-no-files-found: error
 
   release:
     needs: build
-    # if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    env:
+      ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
     steps:
       - name: Download all packages
         uses: actions/download-artifact@v4
