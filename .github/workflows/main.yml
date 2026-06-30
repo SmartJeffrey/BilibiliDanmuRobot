@@ -95,7 +95,10 @@ jobs:
             tar -czvf ../"${PKG_FILENAME}" ./*
           fi
           cd ..
-          ls -la ./*.tar.gz ./*.zip
+          # 修复：使用nullglob防止无匹配文件时报错
+          shopt -s nullglob
+          ls -la *.tar.gz *.zip
+          shopt -u nullglob
           echo "FILE=${PKG_FILENAME}" >> $GITHUB_ENV
 
       - name: Upload artifact
