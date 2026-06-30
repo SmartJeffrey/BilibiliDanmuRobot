@@ -54,9 +54,13 @@ jobs:
             BIN_NAME="${BIN_NAME}.exe"
           fi
 
-          # 只有musl构建才启用CGO=0和musl-gcc，Windows/mac普通Linux直接跳过
+          # 全局清空CC/CXX，防止交叉编译windows/darwin报错
+          unset CC
+          unset CXX
+          export CGO_ENABLED=0
+
+          # 仅musl任务重新设置musl-gcc
           if [[ "${{ matrix.target.musl }}" == "true" ]]; then
-            export CGO_ENABLED=0
             export CC=musl-gcc
           fi
 
